@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+torch
+transformers
+librosa
+numpy
+python-multipart
+pydantic
+moviepy
+scikit-learn
+pandas
+tqdm
+opencv-python
+torchvision
+Pillow
