@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-
 class FusionClassifier(nn.Module):
     def __init__(self, text_dim=768, audio_dim=768, hidden_dim=512, num_classes=7):
         super().__init__()
