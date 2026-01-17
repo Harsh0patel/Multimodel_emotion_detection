@@ -1,7 +1,5 @@
 from roboflow import Roboflow
 
-rf = Roboflow(api_key='1b8LIsZsWgXkHtqiZr1b')
-
 workspace = rf.workspace('my-workspace')
 project = rf.project("multimodeldetection")
 
