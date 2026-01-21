@@ -3,6 +3,8 @@ import torch.nn as nn
 import torchvision.models as models
 from transformers import AutoTokenizer, AutoModel, Wav2Vec2FeatureExtractor, Wav2Vec2Model
 
+WINDOW_SECONDS = 2.0
+INFERENCE_INTERVAL = 5.0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_VIDEO_LEN = 512
 MAX_AUDIO_LEN = 16000 * 3
@@ -25,3 +27,4 @@ for parms in VIDEO_MODEL.parameters():
 VIDEO_MODEL = VIDEO_MODEL.to(DEVICE)
 VIDEO_MODEL.eval()
 FUSION_MODEL = "C:/Users/hp333/Desktop/Multimodel_emotion_detection/backend/live_detection_module/models/fusion_model/Model_v2.pt"
+MODEL_VERSION = "1.0.1"
