@@ -88,7 +88,7 @@ class InferenceModel:
                 inputs = self.text_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=64)
                 text_emb = compute_text_embeddings(inputs["input_ids"], inputs["attention_mask"], self.text_encoder, self.device)
             else:
-                text_emb = torch.zeros((1, 768)).to(self.device)
+                text_emb = torch.zeros((1, 384)).to(self.device)
 
             # Audio Processing
             if audio_values is not None:

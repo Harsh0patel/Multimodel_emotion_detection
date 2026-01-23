@@ -5,47 +5,15 @@ import { motion, AnimatePresence } from "framer-motion";
 import axios from "axios";
 import Webcam from "react-webcam";
 import {
-    LineChart, Line, CartesianGrid,
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
-    ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell
+    ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell,
+    LineChart, Line, CartesianGrid
 } from "recharts";
-import { Download, Trash2, TrendingUp, Info, Mic, Type, Camera, Brain, Activity, BarChart2, AlertCircle, Video } from "lucide-react";
-
-// Define outside to prevent re-declaration on every render
-const AudioVisualizer = ({ isRecording, analyser }) => {
-    const [bars, setBars] = useState(new Array(32).fill(10));
-    const animationFrameRef = useRef(null);
-
-    useEffect(() => {
-        if (!isRecording || !analyser) return;
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        const update = () => {
-            if (!analyser) return;
-            analyser.getByteFrequencyData(dataArray);
-            const normalizedData = Array.from(dataArray.slice(0, 32)).map(v => Math.max(10, v / 2.5));
-            setBars(normalizedData);
-            animationFrameRef.current = requestAnimationFrame(update);
-        };
-        animationFrameRef.current = requestAnimationFrame(update);
-        return () => {
-            if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-        };
-    }, [isRecording, analyser]);
-
-    return (
-        <div className="flex items-end justify-center space-x-1 h-32 w-full max-w-md mx-auto">
-            {bars.map((h, i) => (
-                <motion.div
-                    key={i}
-                    animate={{ height: `${h}%` }}
-                    transition={{ type: "spring", stiffness: 300, damping: 20 }}
-                    className="w-2 bg-gradient-to-t from-primary/20 to-primary rounded-full"
-                />
-            ))}
-        </div>
-    );
-};
+import {
+    Download, Trash2, TrendingUp, Info, Camera, Brain,
+    Activity, BarChart2, AlertCircle, Video, Upload,
+    Play, Pause, RefreshCcw, LogIn, Github
+} from "lucide-react";
 
 const EMOTION_COLORS = {
     Neutral: "#94a3b8",
@@ -58,25 +26,22 @@ const EMOTION_COLORS = {
 };
 
 const API_URL = "http://127.0.0.1:8000";
+const WS_URL = "ws://127.0.0.1:8000/ws/stream";
 
 export default function EmotionDashboard() {
-    const [activeTab, setActiveTab] = useState("text");
-    const [text, setText] = useState("");
-    const [isRecording, setIsRecording] = useState(false);
-    const [isVideoActive, setIsVideoActive] = useState(false);
-    const [loading, setLoading] = useState(false);
+    const [activeMode, setActiveMode] = useState("stream"); // "stream" or "upload"
+    const [isStreaming, setIsStreaming] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
     const [results, setResults] = useState(null);
     const [error, setError] = useState(null);
     const [history, setHistory] = useState([]);
     const [backendStatus, setBackendStatus] = useState("checking");
+    const [uploadResults, setUploadResults] = useState(null);
 
-    const mediaRecorderRef = useRef(null);
-    const audioChunksRef = useRef([]);
     const webcamRef = useRef(null);
-    const analysisIntervalRef = useRef(null);
-    const audioContextRef = useRef(null);
-    const analyserRef = useRef(null);
-    const audioStreamRef = useRef(null);
+    const socketRef = useRef(null);
+    const streamIntervalRef = useRef(null);
 
     // Backend status check
     const checkBackend = async () => {
@@ -90,578 +55,399 @@ export default function EmotionDashboard() {
 
     useEffect(() => {
         checkBackend();
-        const timer = setInterval(checkBackend, 10000); // Check every 10s
+        const timer = setInterval(checkBackend, 10000);
         return () => clearInterval(timer);
     }, []);
 
-    // Persistence logic
-    useEffect(() => {
-        const saved = localStorage.getItem("emotion_history");
-        if (saved) {
-            try {
-                setHistory(JSON.parse(saved));
-            } catch (e) {
-                console.error("Failed to parse history", e);
+    // WebSocket Logic for Streaming
+    const startStreaming = useCallback(() => {
+        if (socketRef.current) return;
+
+        socketRef.current = new WebSocket(WS_URL);
+
+        socketRef.current.onopen = () => {
+            console.log("WebSocket Connected");
+            setIsStreaming(true);
+            setError(null);
+
+            // Start sending frames
+            streamIntervalRef.current = setInterval(() => {
+                if (webcamRef.current && socketRef.current?.readyState === WebSocket.OPEN) {
+                    const screenshot = webcamRef.current.getScreenshot();
+                    if (screenshot) {
+                        socketRef.current.send(screenshot);
+                    }
+                }
+            }, 1000); // 1 frame per second
+        };
+
+        socketRef.current.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.error) {
+                setError(data.error);
+            } else {
+                setResults(data);
+                addToHistory(data);
             }
+        };
+
+        socketRef.current.onclose = () => {
+            console.log("WebSocket Disconnected");
+            stopStreaming();
+        };
+
+        socketRef.current.onerror = (err) => {
+            console.error("WebSocket Error:", err);
+            setError("WebSocket connection failed.");
+            stopStreaming();
+        };
+    }, []);
+
+    const stopStreaming = useCallback(() => {
+        setIsStreaming(false);
+        if (streamIntervalRef.current) clearInterval(streamIntervalRef.current);
+        if (socketRef.current) {
+            socketRef.current.close();
+            socketRef.current = null;
         }
     }, []);
 
     useEffect(() => {
-        localStorage.setItem("emotion_history", JSON.stringify(history.slice(0, 20))); // Keep last 20
-    }, [history]);
+        return () => stopStreaming();
+    }, [stopStreaming]);
+
+    const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setIsUploading(true);
+        setError(null);
+        setUploadProgress(10);
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            setUploadProgress(30);
+            const resp = await axios.post(`${API_URL}/predict/video-upload`, formData, {
+                onUploadProgress: (progressEvent) => {
+                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    setUploadProgress(30 + (percentCompleted * 0.7)); // Scale progress to remaining 70%
+                }
+            });
+            setUploadResults(resp.data);
+            setResults(resp.data.summary);
+            setUploadProgress(100);
+            setTimeout(() => setIsUploading(false), 500);
+        } catch (err) {
+            console.error("Upload error:", err);
+            setError("Failed to process video upload. Make sure it's a valid video file.");
+            setIsUploading(false);
+        }
+    };
 
     const addToHistory = (result) => {
         const newEntry = {
             id: Date.now(),
             timestamp: new Date().toLocaleTimeString(),
-            raw_timestamp: new Date().toISOString(),
             emotion: result.dominant,
-            confidence: Math.max(result.text_confidence || 0, result.audio_confidence || 0, result.vision_confidence || 0),
-            modalities: [
-                result.text_confidence > 0.1 ? 'Text' : '',
-                result.audio_confidence > 0.1 ? 'Audio' : '',
-                result.vision_confidence > 0.1 ? 'Vision' : ''
-            ].filter(Boolean).join(" + "),
-            all_probs: result.fused
+            confidence: result.vision_confidence || 0,
+            probs: result.fused
         };
-        setHistory(prev => [newEntry, ...prev]);
+        setHistory(prev => [newEntry, ...prev].slice(0, 20));
     };
 
-
-
-    const startRecording = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioStreamRef.current = stream;
-
-            // Setup Visualizer
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContextClass) {
-                throw new Error("AudioContext not supported");
-            }
-
-            const audioCtx = new AudioContextClass();
-            const analyser = audioCtx.createAnalyser();
-            const source = audioCtx.createMediaStreamSource(stream);
-            source.connect(analyser);
-            analyser.fftSize = 256;
-
-            audioContextRef.current = audioCtx;
-            analyserRef.current = analyser;
-
-            mediaRecorderRef.current = new MediaRecorder(stream);
-            audioChunksRef.current = [];
-
-            mediaRecorderRef.current.ondataavailable = (event) => {
-                if (event.data.size > 0) audioChunksRef.current.push(event.data);
-            };
-
-            mediaRecorderRef.current.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
-                await handleMultimodalUpload(audioBlob, null);
-
-                if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-                    audioContextRef.current.close();
-                }
-                if (audioStreamRef.current) {
-                    audioStreamRef.current.getTracks().forEach(track => track.stop());
-                }
-            };
-
-            mediaRecorderRef.current.start();
-            setIsRecording(true);
-        } catch (err) {
-            console.error("Recording start failed", err);
-            setError("Microphone access denied or not available.");
-        }
-    };
-
-    const stopRecording = () => {
-        if (mediaRecorderRef.current && isRecording) {
-            mediaRecorderRef.current.stop();
-            setIsRecording(false);
-            if (audioStreamRef.current) {
-                audioStreamRef.current.getTracks().forEach(track => track.stop());
-            }
-        }
-    };
-
-    const captureFrame = useCallback(() => {
-        if (webcamRef.current) {
-            const imageSrc = webcamRef.current.getScreenshot();
-            return imageSrc;
-        }
-        return null;
-    }, [webcamRef]);
-
-    const handleTextSubmit = async () => {
-        if (!text.trim()) return;
-        setLoading(true);
-        setError(null);
-        try {
-            const resp = await axios.post(`${API_URL}/predict/text`, { text });
-            setResults(resp.data);
-            addToHistory(resp.data);
-        } catch (err) {
-            setError("Failed to analyze text. Is the backend running?");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleMultimodalUpload = async (audioBlob, imageBase64) => {
-        setLoading(true);
-        setError(null);
-        const formData = new FormData();
-
-        if (text) formData.append("text", text);
-        if (audioBlob) formData.append("audio", audioBlob, "audio.wav");
-
-        if (imageBase64) {
-            const res = await fetch(imageBase64);
-            const blob = await res.blob();
-            formData.append("video", blob, "frame.jpg");
-        }
-
-        try {
-            const resp = await axios.post(`${API_URL}/predict/multimodal`, formData);
-            setResults(resp.data);
-            addToHistory(resp.data);
-            if (error) setError(null);
-        } catch (err) {
-            console.error("Multimodal error:", err);
-            const msg = err.response ? `Analysis failed: ${err.response.data.detail || 'Server error'}` : "Cannot connect to backend server. Is it running?";
-            setError(msg);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const analyzeVideoFrame = async () => {
-        if (!isVideoActive || activeTab !== "video") return;
-
-        const frame = captureFrame();
-        if (frame) {
-            try {
-                const res = await fetch(frame);
-                const blob = await res.blob();
-                const formData = new FormData();
-                formData.append("file", blob, "frame.jpg");
-                const resp = await axios.post(`${API_URL}/predict/vision`, formData);
-                setResults(resp.data);
-                if (error && error.includes("backend")) setError(null); // Clear error if it was a connection issue
-            } catch (err) {
-                // Background analysis failed
-                console.warn("Background frame analysis failed:", err.message);
-                if (!err.response) {
-                    setError("Backend server is offline or unreachable. Please start the backend.");
-                } else if (err.response.status === 413) {
-                    setError("Image frame is too large for the backend.");
-                } else {
-                    console.error("Vision API Error:", err.response.data);
-                }
-            }
-        }
-    };
-
-    useEffect(() => {
-        if (isVideoActive && activeTab === "video") {
-            analysisIntervalRef.current = setInterval(analyzeVideoFrame, 3000);
-        } else {
-            if (analysisIntervalRef.current) clearInterval(analysisIntervalRef.current);
-        }
-        return () => {
-            if (analysisIntervalRef.current) clearInterval(analysisIntervalRef.current);
-        };
-    }, [isVideoActive, activeTab]);
-
-    const generateReport = async () => {
-        if (history.length === 0) return;
-
-        setLoading(true);
-        try {
-            // Lazy load jsPDF to avoid SSR issues
-            const { default: jsPDF } = await import("jspdf");
-            await import("jspdf-autotable");
-
-            const doc = jsPDF();
-            const timestamp = new Date().toLocaleString();
-
-            // Header
-            doc.setFontSize(22);
-            doc.setTextColor(30, 27, 75); // Dark blue
-            doc.text("Emotional Intelligence Report", 14, 22);
-
-            doc.setFontSize(10);
-            doc.setTextColor(100);
-            doc.text(`Generated on: ${timestamp}`, 14, 30);
-
-            // Summary Table
-            const tableData = [...history].reverse().map(item => [
-                item.timestamp,
-                item.emotion,
-                `${(item.confidence * 100).toFixed(1)}%`,
-                item.modalities
-            ]);
-
-            doc.autoTable({
-                head: [['Time', 'Dominant Emotion', 'Confidence', 'Modalities']],
-                body: tableData,
-                startY: 40,
-                theme: 'grid',
-                headStyles: { fillColor: [139, 92, 246] }, // Primary color
-            });
-
-            doc.save(`Emotion_Report_${Date.now()}.pdf`);
-        } catch (err) {
-            console.error("PDF generation failed", err);
-            setError("Failed to generate PDF report.");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const chartData = results ? Object.entries(results.fused).map(([name, value]) => ({
+    const chartData = results ? Object.entries(results.fused || results.average_probs).map(([name, value]) => ({
         name,
         value: parseFloat((value * 100).toFixed(1)),
         fullMark: 100
     })) : [];
 
-    const trendData = [...history].reverse().map(item => ({
-        time: item.timestamp,
-        confidence: parseFloat((item.confidence * 100).toFixed(1)),
-        emotion: item.emotion
-    }));
-
-
+    const timelineData = uploadResults?.timeline ? uploadResults.timeline.map(t => ({
+        time: t.second,
+        ...Object.fromEntries(Object.entries(t.probs).map(([k, v]) => [k, (v * 100).toFixed(1)]))
+    })) : [];
 
     return (
-        <div className="w-full max-w-6xl mx-auto p-4 space-y-8">
-            {/* Input Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <motion.div
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    className="glass rounded-3xl p-8 space-y-6"
-                >
-                    <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center space-x-3">
-                            <div className="bg-primary/20 p-2 rounded-lg">
-                                <Activity className="text-primary w-6 h-6" />
-                            </div>
-                            <h2 className="text-2xl font-bold tracking-tight">Emotional Input</h2>
-                        </div>
-                        <div className="flex items-center space-x-2 px-3 py-1 rounded-full bg-white/5 border border-white/10">
-                            <div className={`w-2 h-2 rounded-full ${backendStatus === 'online' ? 'bg-green-500 animate-pulse' : backendStatus === 'offline' ? 'bg-red-500' : 'bg-yellow-500'}`} />
-                            <span className="text-[10px] uppercase font-bold text-white/40">Backend: {backendStatus}</span>
-                        </div>
+        <div className="w-full max-w-7xl mx-auto p-4 space-y-8 min-h-screen bg-slate-950 text-white font-sans">
+            {/* Header / OAuth Section */}
+            <div className="flex flex-col md:flex-row justify-between items-center bg-white/5 p-6 rounded-3xl border border-white/10 glass mb-8">
+                <div className="flex items-center space-x-4 mb-4 md:mb-0">
+                    <div className="bg-primary p-3 rounded-2xl shadow-lg shadow-primary/20">
+                        <Brain className="w-8 h-8 text-white" />
                     </div>
-
-                    <div className="flex space-x-2 p-1 bg-white/5 rounded-xl">
-                        {[
-                            { id: "text", icon: Type, label: "Text" },
-                            { id: "audio", icon: Mic, label: "Audio" },
-                            { id: "video", icon: Video, label: "Video" }
-                        ].map((tab) => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
-                                className={`flex-1 flex items-center justify-center py-2 rounded-lg transition-all ${activeTab === tab.id ? "bg-primary text-white shadow-lg shadow-primary/25" : "hover:bg-white/5 text-white/50"}`}
-                            >
-                                <tab.icon className="w-4 h-4 mr-2" /> {tab.label}
-                            </button>
-                        ))}
-                    </div>
-
-                    <AnimatePresence mode="wait">
-                        {activeTab === "text" && (
-                            <motion.div
-                                key="text"
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -10 }}
-                                className="space-y-4"
-                            >
-                                <textarea
-                                    value={text}
-                                    onChange={(e) => setText(e.target.value)}
-                                    placeholder="How are you feeling? Type your thoughts here..."
-                                    className="w-full h-40 bg-white/5 rounded-2xl p-4 focus:ring-2 focus:ring-primary outline-none resize-none transition-all placeholder:text-white/30 text-white"
-                                />
-                                <button
-                                    onClick={handleTextSubmit}
-                                    disabled={loading || !text}
-                                    className="w-full py-4 bg-gradient-to-r from-primary to-secondary rounded-xl font-bold hover:opacity-90 disabled:opacity-50 transition-all flex items-center justify-center text-white"
-                                >
-                                    {loading ? <div className="animate-spin rounded-full h-5 w-5 border-2 border-white/20 border-t-white" /> : "Analyze Sentiment"}
-                                </button>
-                            </motion.div>
-                        )}
-
-                        {activeTab === "audio" && (
-                            <motion.div
-                                key="audio"
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -10 }}
-                                className="space-y-6 flex flex-col items-center justify-center py-8"
-                            >
-                                {isRecording ? (
-                                    <AudioVisualizer isRecording={isRecording} analyser={analyserRef.current} />
-                                ) : (
-                                    <div className="w-32 h-32 rounded-full border-2 border-dashed border-white/10 flex items-center justify-center">
-                                        <Mic className="text-white/10 w-12 h-12" />
-                                    </div>
-                                )}
-
-                                <div className={`relative ${isRecording ? 'animate-pulse' : ''}`}>
-                                    <button
-                                        onClick={isRecording ? stopRecording : startRecording}
-                                        className={`w-32 h-32 rounded-full flex items-center justify-center transition-all ${isRecording ? 'bg-red-500 shadow-lg shadow-red-500/50' : 'bg-primary/20 hover:bg-primary/30 border-2 border-primary'}`}
-                                    >
-                                        <Mic className={`w-12 h-12 ${isRecording ? 'text-white' : 'text-primary'}`} />
-                                    </button>
-                                </div>
-                                <p className="text-white/60 font-medium tracking-wide">
-                                    {isRecording ? "Listening to your voice..." : "Click to record audio"}
-                                </p>
-                            </motion.div>
-                        )}
-
-                        {activeTab === "video" && (
-                            <motion.div
-                                key="video"
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -10 }}
-                                className="space-y-4"
-                            >
-                                <div className="relative rounded-2xl overflow-hidden glass border-white/10 aspect-video flex items-center justify-center bg-black/40">
-                                    {isVideoActive ? (
-                                        <Webcam
-                                            audio={false}
-                                            ref={webcamRef}
-                                            screenshotFormat="image/jpeg"
-                                            className="w-full h-full object-cover"
-                                        />
-                                    ) : (
-                                        <div className="flex flex-col items-center text-white/20">
-                                            <Camera className="w-16 h-16 mb-2" />
-                                            <p>Camera is inactive</p>
-                                        </div>
-                                    )}
-                                </div>
-                                <button
-                                    onClick={() => setIsVideoActive(!isVideoActive)}
-                                    className={`w-full py-3 rounded-xl font-bold transition-all flex items-center justify-center ${isVideoActive ? 'bg-red-500/20 text-red-500 border border-red-500/50' : 'bg-accent text-white'}`}
-                                >
-                                    {isVideoActive ? "Stop Camera" : "Start Real-time Analysis"}
-                                </button>
-                                {isVideoActive && (
-                                    <button
-                                        onClick={() => handleMultimodalUpload(null, captureFrame())}
-                                        className="w-full py-3 bg-white/5 hover:bg-white/10 text-white rounded-xl border border-white/10 transition-all font-medium"
-                                    >
-                                        Capture & Analyze Tri-Modal
-                                    </button>
-                                )}
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-
-                    {error && (
-                        <div className="flex items-center p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
-                            <AlertCircle className="w-4 h-4 mr-2" />
-                            {error}
-                        </div>
-                    )}
-                </motion.div>
-
-                {/* Results Section */}
-                <motion.div
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    className="glass rounded-3xl p-8 flex flex-col"
-                >
-                    <div className="flex items-center justify-between mb-8">
-                        <div className="flex items-center space-x-3">
-                            <div className="bg-secondary/20 p-2 rounded-lg">
-                                <BarChart2 className="text-secondary w-6 h-6" />
-                            </div>
-                            <h2 className="text-2xl font-bold tracking-tight">Detection Results</h2>
-                        </div>
-                        {results && (
-                            <div className="px-4 py-1.5 bg-secondary/10 border border-secondary/20 rounded-full text-secondary text-sm font-bold uppercase tracking-wider">
-                                {results.dominant}
-                            </div>
-                        )}
-                    </div>
-
-                    {!results && !loading && (
-                        <div className="flex-1 flex flex-col items-center justify-center text-white/20 space-y-4">
-                            <Brain className="w-20 h-20 opacity-10" />
-                            <p className="text-center font-medium">Capture your feelings to see <br />AI-powered analysis</p>
-                        </div>
-                    )}
-
-                    {loading && (
-                        <div className="flex-1 flex flex-col items-center justify-center space-y-6">
-                            <div className="relative w-24 h-24">
-                                <div className="absolute inset-0 border-4 border-primary/20 rounded-full" />
-                                <div className="absolute inset-0 border-4 border-t-primary rounded-full animate-spin" />
-                            </div>
-                            <p className="text-primary animate-pulse-slow font-bold tracking-widest uppercase text-sm">Processing Neural Fusion</p>
-                        </div>
-                    )}
-
-                    {results && !loading && (
-                        <div className="flex-1 flex flex-col space-y-8">
-                            <div className="h-[300px] w-full">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <RadarChart cx="50%" cy="50%" outerRadius="80%" data={chartData}>
-                                        <PolarGrid stroke="#ffffff20" />
-                                        <PolarAngleAxis dataKey="name" tick={{ fill: '#ffffff60', fontSize: 12 }} />
-                                        <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                                        <Radar
-                                            name="Emotion"
-                                            dataKey="value"
-                                            stroke="#8b5cf6"
-                                            fill="#8b5cf6"
-                                            fillOpacity={0.4}
-                                        />
-                                        <Tooltip
-                                            contentStyle={{ backgroundColor: '#1e1b4b', border: 'none', borderRadius: '12px', color: '#fff' }}
-                                        />
-                                    </RadarChart>
-                                </ResponsiveContainer>
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-2">
-                                {[
-                                    { label: "Text", val: results.text_confidence, color: "bg-primary" },
-                                    { label: "Audio", val: results.audio_confidence, color: "bg-secondary" },
-                                    { label: "Vision", val: results.vision_confidence, color: "bg-accent" }
-                                ].map((item) => (
-                                    <div key={item.label} className="p-3 bg-white/5 rounded-2xl border border-white/10">
-                                        <p className="text-white/40 text-[10px] uppercase font-bold mb-1">{item.label}</p>
-                                        <p className="text-lg font-bold">{(item.val * 100).toFixed(0)}%</p>
-                                        <div className="w-full bg-white/10 h-1 rounded-full mt-2 overflow-hidden">
-                                            <div className={`${item.color} h-full`} style={{ width: `${item.val * 100}%` }} />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </motion.div>
-            </div>
-
-            {/* Probability Bars and History */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="glass rounded-3xl p-8 lg:col-span-2 space-y-8"
-                >
                     <div>
-                        <div className="flex items-center space-x-2 mb-6 text-white/60">
-                            <TrendingUp className="w-4 h-4" />
-                            <h3 className="text-lg font-bold">Emotion Probabilities</h3>
-                        </div>
-                        <div className="h-[200px] w-full">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={chartData} layout="vertical">
-                                    <XAxis type="number" hide domain={[0, 100]} />
-                                    <YAxis dataKey="name" type="category" width={80} tick={{ fill: '#ffffff60', fontSize: 12 }} axisLine={false} tickLine={false} />
-                                    <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                                        {chartData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={EMOTION_COLORS[entry.name] || '#8b5cf6'} />
-                                        ))}
-                                    </Bar>
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
+                        <h1 className="text-3xl font-black bg-gradient-to-r from-white to-white/40 bg-clip-text text-transparent italic tracking-tighter uppercase">
+                            Sentience AI
+                        </h1>
+                        <p className="text-xs font-bold text-primary tracking-widest uppercase">Video Emotion Analytics</p>
                     </div>
+                </div>
 
-                    {history.length > 2 && (
-                        <div className="pt-8 border-t border-white/5">
-                            <div className="flex items-center space-x-2 mb-6 text-white/60">
-                                <Activity className="w-4 h-4" />
-                                <h3 className="text-lg font-bold">Session Confidence Trend</h3>
-                            </div>
-                            <div className="h-[150px] w-full">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={trendData}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" />
-                                        <XAxis dataKey="time" hide />
-                                        <YAxis domain={[0, 100]} hide />
-                                        <Tooltip
-                                            contentStyle={{ backgroundColor: '#1e1b4b', border: 'none', borderRadius: '12px', color: '#fff' }}
-                                        />
-                                        <Line type="monotone" dataKey="confidence" stroke="#8b5cf6" strokeWidth={3} dot={{ fill: '#8b5cf6', r: 4 }} activeDot={{ r: 6 }} />
-                                    </LineChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-                    )}
-                </motion.div>
+                <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10">
+                        <div className={`w-2 h-2 rounded-full ${backendStatus === 'online' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                        <span className="text-[10px] uppercase font-black text-white/60 tracking-widest">
+                            API: {backendStatus}
+                        </span>
+                    </div>
+                    <button className="flex items-center space-x-2 px-4 py-2 bg-white text-black rounded-xl font-bold hover:bg-white/90 transition-all text-sm">
+                        <LogIn className="w-4 h-4" />
+                        <span>Sign In</span>
+                    </button>
+                    <button className="p-2 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all">
+                        <Github className="w-5 h-5 text-white/60" />
+                    </button>
+                </div>
+            </div>
 
-                {/* Session History */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="glass rounded-3xl p-8 overflow-hidden flex flex-col"
-                >
-                    <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-lg font-bold text-white/60">Session History</h3>
-                        <div className="flex items-center space-x-2">
-                            {history.length > 0 && (
-                                <button
-                                    onClick={generateReport}
-                                    title="Download PDF Report"
-                                    className="p-2 hover:bg-white/5 rounded-lg text-primary transition-colors"
-                                >
-                                    <Download className="w-4 h-4" />
-                                </button>
-                            )}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Left Column: Input (Streaming/Upload) */}
+                <div className="lg:col-span-12 xl:col-span-7 space-y-8">
+                    <div className="glass rounded-[2rem] overflow-hidden border border-white/5 shadow-2xl">
+                        <div className="flex border-b border-white/5">
                             <button
-                                onClick={() => setHistory([])}
-                                title="Clear History"
-                                className="p-2 hover:bg-white/5 rounded-lg text-white/30 hover:text-red-400 transition-colors"
+                                onClick={() => { setActiveMode("stream"); stopStreaming(); setResults(null); }}
+                                className={`flex-1 py-6 font-black uppercase tracking-widest text-sm transition-all flex items-center justify-center space-x-3 ${activeMode === "stream" ? "bg-white/10 text-white" : "text-white/30 hover:text-white/50"}`}
                             >
-                                <Trash2 className="w-4 h-4" />
+                                <Video className="w-5 h-5" />
+                                <span>Live Stream</span>
+                            </button>
+                            <button
+                                onClick={() => { setActiveMode("upload"); stopStreaming(); setResults(null); }}
+                                className={`flex-1 py-6 font-black uppercase tracking-widest text-sm transition-all flex items-center justify-center space-x-3 ${activeMode === "upload" ? "bg-white/10 text-white" : "text-white/30 hover:text-white/50"}`}
+                            >
+                                <Upload className="w-5 h-5" />
+                                <span>Video Upload</span>
                             </button>
                         </div>
-                    </div>
 
-                    <div className="space-y-4 overflow-y-auto max-h-[400px] pr-2 custom-scrollbar flex-1">
-                        {history.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-12 text-white/10">
-                                <Info className="w-8 h-8 mb-2" />
-                                <p className="text-sm italic">No records yet</p>
-                            </div>
-                        ) : (
-                            history.map((item) => (
+                        <div className="p-8">
+                            <AnimatePresence mode="wait">
+                                {activeMode === "stream" ? (
+                                    <motion.div
+                                        key="stream"
+                                        initial={{ opacity: 0, y: 20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -20 }}
+                                        className="space-y-6"
+                                    >
+                                        <div className="relative rounded-3xl overflow-hidden aspect-video bg-black/40 border-4 border-white/5 group shadow-inner">
+                                            {isStreaming ? (
+                                                <>
+                                                    <Webcam
+                                                        audio={false}
+                                                        ref={webcamRef}
+                                                        screenshotFormat="image/jpeg"
+                                                        className="w-full h-full object-cover scale-105"
+                                                    />
+                                                    <div className="absolute top-6 left-6 flex items-center space-x-2 bg-red-600 px-3 py-1 rounded-full animate-pulse">
+                                                        <div className="w-2 h-2 bg-white rounded-full" />
+                                                        <span className="text-[10px] font-black uppercase tracking-tighter">Live</span>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-4">
+                                                    <div className="p-6 rounded-full bg-white/5 border border-white/10 group-hover:scale-110 transition-transform duration-500">
+                                                        <Camera className="w-16 h-16 text-white/10" />
+                                                    </div>
+                                                    <p className="text-white/20 font-bold tracking-widest uppercase text-xs">Camera Inactive</p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <button
+                                            onClick={isStreaming ? stopStreaming : startStreaming}
+                                            className={`w-full py-6 rounded-2xl font-black uppercase tracking-widest transition-all shadow-xl flex items-center justify-center space-x-4 ${isStreaming ? 'bg-red-500/20 text-red-500 border border-red-500/50 hover:bg-red-500/30' : 'bg-primary text-white hover:opacity-90 active:scale-[0.98]'}`}
+                                        >
+                                            {isStreaming ? <><Pause className="w-6 h-6" /> <span>Stop Analysis</span></> : <><Play className="w-6 h-6" /> <span>Start Live Capture</span></>}
+                                        </button>
+                                    </motion.div>
+                                ) : (
+                                    <motion.div
+                                        key="upload"
+                                        initial={{ opacity: 0, y: 20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -20 }}
+                                        className="space-y-6"
+                                    >
+                                        <div className="relative rounded-3xl border-2 border-dashed border-white/10 h-[400px] flex flex-col items-center justify-center space-y-6 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-pointer group" onClick={() => document.getElementById('video-upload').click()}>
+                                            <input type="file" id="video-upload" className="hidden" accept="video/*" onChange={handleFileUpload} />
+                                            {isUploading ? (
+                                                <div className="flex flex-col items-center space-y-6 w-full max-w-xs">
+                                                    <div className="relative w-24 h-24">
+                                                        <div className="absolute inset-0 border-4 border-white/10 rounded-full" />
+                                                        <div className="absolute inset-0 border-4 border-t-primary rounded-full animate-spin" />
+                                                    </div>
+                                                    <p className="text-primary font-black uppercase tracking-widest text-xs animate-pulse">Neural Processing...</p>
+                                                    <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
+                                                        <motion.div
+                                                            className="bg-primary h-full"
+                                                            initial={{ width: 0 }}
+                                                            animate={{ width: `${uploadProgress}%` }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="p-8 rounded-full bg-white/5 border border-white/10 group-hover:border-primary/50 transition-colors duration-500">
+                                                        <Upload className="w-16 h-16 text-white/20 group-hover:text-primary transition-colors duration-500" />
+                                                    </div>
+                                                    <div className="text-center">
+                                                        <p className="text-lg font-black uppercase tracking-tighter italic">Drop Video Here</p>
+                                                        <p className="text-white/30 text-xs font-bold uppercase tracking-widest mt-2">MP4, WEBM, MOV supported</p>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+
+                            {error && (
                                 <motion.div
-                                    initial={{ opacity: 0, x: 20 }}
-                                    animate={{ opacity: 1, x: 0 }}
-                                    key={item.id}
-                                    className="p-3 bg-white/5 rounded-xl border border-white/5 flex items-center justify-between group hover:bg-white/10 transition-all cursor-default"
+                                    initial={{ opacity: 0, scale: 0.95 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    className="mt-6 flex items-center p-5 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-sm font-bold shadow-lg"
                                 >
-                                    <div>
-                                        <p className="text-xs text-white/40">{item.timestamp}</p>
-                                        <p className="font-bold text-sm" style={{ color: EMOTION_COLORS[item.emotion] }}>{item.emotion}</p>
-                                    </div>
-                                    <div className="text-right">
-                                        <p className="text-[10px] text-white/30 uppercase font-bold">{item.modalities}</p>
-                                        <p className="text-xs font-mono">{(item.confidence * 100).toFixed(0)}%</p>
-                                    </div>
+                                    <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
+                                    {error}
                                 </motion.div>
-                            ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Right Column: Analytics */}
+                <div className="lg:col-span-12 xl:col-span-5 space-y-8">
+                    <div className="glass rounded-[2rem] p-10 border border-white/5 flex flex-col min-h-[500px] shadow-2xl">
+                        <div className="flex items-center justify-between mb-10">
+                            <div className="flex items-center space-x-3">
+                                <div className="bg-secondary/20 p-2 rounded-xl">
+                                    <BarChart2 className="text-secondary w-6 h-6" />
+                                </div>
+                                <h2 className="text-xl font-black italic uppercase tracking-tighter">Real-time Insights</h2>
+                            </div>
+                            {results && (
+                                <div className="px-5 py-2 bg-primary/10 border border-primary/20 rounded-full text-primary text-xs font-black uppercase tracking-widest shadow-lg">
+                                    {results.dominant}
+                                </div>
+                            )}
+                        </div>
+
+                        {!results && !isUploading && (
+                            <div className="flex-1 flex flex-col items-center justify-center text-white/5 space-y-6">
+                                <Brain className="w-32 h-32 opacity-20" />
+                                <div className="text-center">
+                                    <p className="text-lg font-black italic uppercase tracking-tighter">Awaiting Signal</p>
+                                    <p className="text-xs font-bold uppercase tracking-widest opacity-40 mt-1">Initialize stream to begin analysis</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {results && (
+                            <div className="flex-1 space-y-12">
+                                <div className="h-[280px] w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={chartData}>
+                                            <PolarGrid stroke="#ffffff10" />
+                                            <PolarAngleAxis dataKey="name" tick={{ fill: '#ffffff40', fontSize: 10, fontWeight: 800 }} />
+                                            <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+                                            <Radar
+                                                name="Emotion"
+                                                dataKey="value"
+                                                stroke="#8b5cf6"
+                                                fill="#8b5cf6"
+                                                fillOpacity={0.4}
+                                            />
+                                            <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '16px', color: '#fff' }} />
+                                        </RadarChart>
+                                    </ResponsiveContainer>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4">
+                                    {chartData.sort((a, b) => b.value - a.value).slice(0, 3).map((item) => (
+                                        <div key={item.name} className="p-5 bg-white/[0.03] rounded-2xl border border-white/5 hover:bg-white/[0.05] transition-all">
+                                            <div className="flex justify-between items-end mb-3">
+                                                <p className="text-white/40 text-[10px] font-black uppercase tracking-widest">{item.name}</p>
+                                                <p className="text-sm font-black italic">{item.value}%</p>
+                                            </div>
+                                            <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
+                                                <motion.div
+                                                    className="h-full bg-gradient-to-r from-primary to-secondary"
+                                                    initial={{ width: 0 }}
+                                                    animate={{ width: `${item.value}%` }}
+                                                    transition={{ duration: 0.8, ease: "easeOut" }}
+                                                />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                         )}
                     </div>
-                </motion.div>
+                </div>
             </div>
+
+            {/* Timeline for Uploads */}
+            {activeMode === "upload" && uploadResults && (
+                <motion.div
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="glass rounded-[2rem] p-10 border border-white/5 shadow-2xl"
+                >
+                    <div className="flex items-center space-x-3 mb-10 text-white/40">
+                        <TrendingUp className="w-5 h-5" />
+                        <h3 className="text-lg font-black italic uppercase tracking-tighter">Neural Timeline</h3>
+                    </div>
+                    <div className="h-[250px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={timelineData}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+                                <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#ffffff20', fontSize: 10 }} label={{ value: 'Seconds', position: 'bottom', fill: '#ffffff20' }} />
+                                <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fill: '#ffffff20', fontSize: 10 }} />
+                                <Tooltip
+                                    contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '16px', color: '#fff', fontSize: '10px' }}
+                                />
+                                {Object.keys(EMOTION_COLORS).map(emotion => (
+                                    <Line
+                                        key={emotion}
+                                        type="monotone"
+                                        dataKey={emotion}
+                                        stroke={EMOTION_COLORS[emotion]}
+                                        strokeWidth={results?.dominant === emotion ? 4 : 2}
+                                        dot={false}
+                                        opacity={results?.dominant === emotion ? 1 : 0.3}
+                                    />
+                                ))}
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </motion.div>
+            )}
+
+            {/* Global History Overlay (Optional footer or sidebar) */}
+            {history.length > 0 && activeMode === "stream" && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    {history.slice(0, 4).map((item) => (
+                        <motion.div
+                            key={item.id}
+                            initial={{ opacity: 0, x: -20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            className="bg-white/5 border border-white/5 p-5 rounded-2xl flex items-center justify-between"
+                        >
+                            <div>
+                                <p className="text-[10px] text-white/20 font-black uppercase tracking-widest">{item.timestamp}</p>
+                                <p className="font-black italic uppercase tracking-tighter" style={{ color: EMOTION_COLORS[item.emotion] }}>{item.emotion}</p>
+                            </div>
+                            <div className="text-right">
+                                <p className="text-[10px] text-white/20 font-black uppercase tracking-widest">Confidence</p>
+                                <p className="text-sm font-mono tracking-tighter">{(item.confidence * 100).toFixed(0)}%</p>
+                            </div>
+                        </motion.div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

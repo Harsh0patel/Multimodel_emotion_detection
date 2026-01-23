@@ -13,3 +13,7 @@ tqdm
 opencv-python
 torchvision
 Pillow
+websockets
+python-jose[cryptography]
+passlib[bcrypt]
+fastapi-users[sqlalchemy,oauth]
