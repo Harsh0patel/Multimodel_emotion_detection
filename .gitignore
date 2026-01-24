@@ -2,3 +2,6 @@ myenv
 data
 meld_audio
 pretrained
+test_data
+side_code
+__pycache__

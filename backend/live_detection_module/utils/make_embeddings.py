@@ -18,7 +18,7 @@ def pad_or_truncate_np(audio_array, target_len):
     return audio_array
 
 def get_face_embeddings(K, model, images, DEVICE):
-
+    print(f"total images recive: {len(images)}")
     if len(images) == 0:
         return np.zeros(2048, dtype = np.float32)
     
@@ -36,6 +36,7 @@ def get_face_embeddings(K, model, images, DEVICE):
             feture = model(img)
             feture = feture.squeeze(0).cpu().numpy().astype(np.float32)
             temp.append(feture)
+        print("made face embeddings.")
 
     if len(temp) == 0:
         return np.zeros(2048, dtype = np.float32)
@@ -46,7 +47,7 @@ def get_audio_embeddings(DEVICE, audio_array, audio_extractor, audio_encoder, MA
     
     if len(audio_array) == 0:
         return np.zeros(768, dtype = np.float32)
-    
+    print(f"audio array recived: {len(audio_array)}")
     audio_array = pad_or_truncate_np(audio_array, MAX_AUDIO_LENGTH)
     audio_inputs = audio_extractor([audio_array], sampling_rate=16000, return_tensors="pt", padding=True)
     audio_inputs = {
@@ -56,6 +57,7 @@ def get_audio_embeddings(DEVICE, audio_array, audio_extractor, audio_encoder, MA
     with torch.no_grad():
         outputs = audio_encoder(**audio_inputs)
         feture = outputs.last_hidden_state.mean(dim = 1)
+        print("made audio embeddings.")
     
     return feture.squeeze(0).cpu().numpy().astype(np.float32)
 
@@ -76,6 +78,7 @@ def get_text_embeddings(DEVICE, audio_array, preprocesser, audio_model, text_tok
         logits = audio_model(input_values).logits
         predicted_ids = torch.argmax(logits, dim=-1)
         transcription = preprocesser.batch_decode(predicted_ids)[0].strip().lower()
+        print(f"translated text : {transcription}")
 
     if transcription == "":
         return np.zeros(768, dtype = np.float32)
@@ -93,5 +96,6 @@ def get_text_embeddings(DEVICE, audio_array, preprocesser, audio_model, text_tok
     with torch.no_grad():
         output = text_encoder(**text_inputs)
         output = output.last_hidden_state[:, 0, :]
+        print("made text embeddings.")
     
     return output.squeeze(0).cpu().numpy().astype(np.float32)

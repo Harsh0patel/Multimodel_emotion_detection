@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from transformers import AutoTokenizer, AutoModel, Wav2Vec2FeatureExtractor, Wav2Vec2Model
+from transformers import AutoTokenizer, AutoModel, Wav2Vec2FeatureExtractor, Wav2Vec2ForCTC, Wav2Vec2Model, Wav2Vec2Processor
 
 WINDOW_SECONDS = 2.0
 INFERENCE_INTERVAL = 5.0
@@ -18,8 +18,11 @@ TEXT_TOKENIZER = AutoTokenizer.from_pretrained(TEXT_MODEL_NAME)
 TEXT_ENCODER = AutoModel.from_pretrained(TEXT_MODEL_NAME)
 TEXT_ENCODER = TEXT_ENCODER.to(DEVICE)
 AUDIO_EXTRACTOR = Wav2Vec2FeatureExtractor.from_pretrained(AUDIO_MODEL_NAME)
-AUDIO_ENCODER = Wav2Vec2Model.from_pretrained(AUDIO_MODEL_NAME)
-AUDIO_ENCODER = AUDIO_ENCODER.to(DEVICE)
+AUDIO_ENCODER_BASE = Wav2Vec2Model.from_pretrained(AUDIO_MODEL_NAME)
+AUDIO_ENCODER_BASE = AUDIO_ENCODER_BASE.to(DEVICE)
+AUDIO_ENCODER_CTC = Wav2Vec2ForCTC.from_pretrained(AUDIO_MODEL_NAME)
+AUDIO_ENCODER_CTC = AUDIO_ENCODER_CTC.to(DEVICE)
+AUDIO_PROCESSER = Wav2Vec2Processor.from_pretrained(AUDIO_MODEL_NAME)
 VIDEO_MODEL = models.resnet50(pretrained = True)
 VIDEO_MODEL.fc = nn.Identity()  # type: ignore
 for parms in VIDEO_MODEL.parameters():
