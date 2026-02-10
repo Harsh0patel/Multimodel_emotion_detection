@@ -29,5 +29,5 @@ for parms in VIDEO_MODEL.parameters():
     parms.requires_grad = False
 VIDEO_MODEL = VIDEO_MODEL.to(DEVICE)
 VIDEO_MODEL.eval()
-FUSION_MODEL = "C:/Users/hp333/Desktop/Multimodel_emotion_detection/backend/live_detection_module/models/fusion_model/Model_v2.pt"
+FUSION_MODEL = "C:/Users/hp333/Desktop/Multimodel_emotion_detection/backend/models/fusion_model/Model_v2.pt"
 MODEL_VERSION = "1.0.1"

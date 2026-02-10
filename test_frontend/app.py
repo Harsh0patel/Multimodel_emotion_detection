@@ -21,7 +21,7 @@ if 'running' not in st.session_state:
 # Load YOLO model
 @st.cache_resource
 def load_yolo():
-    return YOLO('C:/Users/hp333/Desktop/Multimodel_emotion_detection/backend/live_detection_module/models/yolov8n-face.pt')
+    return YOLO('C:/Users/hp333/Desktop/Multimodel_emotion_detection/backend/models/yolov8n-face.pt')
 
 # WebSocket config
 WS_URL = st.text_input("WebSocket URL", "ws://localhost:8000/ws/stream")
