@@ -3,12 +3,12 @@ import torch.nn as nn
 import torchvision.models as models
 from transformers import AutoTokenizer, AutoModel, Wav2Vec2FeatureExtractor, Wav2Vec2ForCTC, Wav2Vec2Model, Wav2Vec2Processor
 
-WINDOW_SECONDS = 2.0
+WINDOW_SECONDS = 3.0
 INFERENCE_INTERVAL = 5.0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_VIDEO_LEN = 512
 MAX_AUDIO_LEN = 16000 * 3
-MAX_TEXT_LEN = 64
+MAX_TEXT_LEN = 32
 K = 16
 
 AUDIO_MODEL_NAME = "facebook/wav2vec2-base-960h"

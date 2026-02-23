@@ -1,0 +1,5 @@
+text_embeddings = 384
+audio_embeddings = 768
+video_embeddings = 2048
+
+audio_chunk_size = 3 seconds

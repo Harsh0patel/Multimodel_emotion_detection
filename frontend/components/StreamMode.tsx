@@ -113,6 +113,7 @@ export default function StreamMode() {
 
             frameCountRef.current = 0;
             lastAudioSendTimeRef.current = Date.now();
+            lastFrameSendTimeRef.current = Date.now();
             addLog('Streaming started', 'success');
 
             // Start capture loop

@@ -4,11 +4,15 @@ from utils.make_embeddings import get_face_embeddings, get_audio_embeddings, get
 from configs import config
 from models import Model
 import asyncio
+import pickle
 
-model = Model.FusionClassifier().to(device=config.DEVICE)
-checkpoint = torch.load(config.FUSION_MODEL, map_location=config.DEVICE)
-model.load_state_dict(checkpoint["model_state_dict"])
-model.eval()
+# model = Model.FusionClassifier().to(device=config.DEVICE)
+# checkpoint = torch.load(config.FUSION_MODEL, map_location=config.DEVICE)
+# model.load_state_dict(checkpoint["model_state_dict"])
+# model.eval()
+model_path = "C:/Users/hp333/Desktop/Multimodel_emotion_detection/backend/models/logistic_regression_model.pkl"
+with open(model_path, 'rb') as f:
+    model = pickle.load(f)
 
 async def infrence_loop(images, audio_array):
 
@@ -17,7 +21,7 @@ async def infrence_loop(images, audio_array):
         get_audio_embeddings,
         DEVICE= config.DEVICE,
         audio_array=audio_array,
-        audio_encoder=config.AUDIO_ENCODER,
+        audio_encoder=config.AUDIO_ENCODER_BASE,
         audio_extractor=config.AUDIO_EXTRACTOR,
         MAX_AUDIO_LENGTH=config.MAX_AUDIO_LEN)
     face_embeddings = asyncio.to_thread(
@@ -31,7 +35,7 @@ async def infrence_loop(images, audio_array):
         get_text_embeddings,
         DEVICE=config.DEVICE,
         audio_array=audio_array,
-        preprocesser = config.AUDIO_ENCODER,
+        preprocesser = config.AUDIO_ENCODER_CTC,
         audio_model= config.AUDIO_EXTRACTOR,
         text_tokenizer= config.TEXT_TOKENIZER,
         text_encoder=config.TEXT_TOKENIZER,
@@ -48,11 +52,15 @@ async def infrence_loop(images, audio_array):
     audio = torch.from_numpy(audio).unsqueeze(0).to(config.DEVICE)
     text = torch.from_numpy(text).unsqueeze(0).to(config.DEVICE)
 
-    with torch.no_grad():
+    # with torch.no_grad():
 
-        outputs = model(face, audio, text)
-        probs = torch.softmax(outputs, dim = 1)
-        preds = torch.argmax(probs, dim = 1)
-        print("getting outputs done.")
+    #     outputs = model(face, audio, text)
+    #     probs = torch.softmax(outputs, dim = 1)
+    #     preds = torch.argmax(probs, dim = 1)
+    #     print("getting outputs done.")
         
-        return preds.item(), probs.squeeze(0).cpu().tolist()
+    #     return preds.item(), probs.squeeze(0).cpu().tolist()
+
+    x = np.concatenate([face, audio, text], axis = 1)
+    preds = model.predict(x)
+    return preds
