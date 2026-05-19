@@ -5,3 +5,4 @@ pretrained
 test_data
 side_code
 __pycache__
+.venv

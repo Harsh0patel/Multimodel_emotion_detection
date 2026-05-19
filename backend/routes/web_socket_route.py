@@ -10,16 +10,16 @@ router = APIRouter()
 @router.websocket("/ws/stream")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    logger.info("✅ Client connected")
+    logger.info("Client connected")
     
     service = EmotionDetectionService(websocket)
     
     try:
         await service.start()
     except WebSocketDisconnect:
-        logger.info("❌ Client disconnected")
+        logger.info("Client disconnected")
     except Exception as e:
-        logger.error(f"❌ Error: {e}", exc_info=True)
+        logger.error(f"Error: {e}", exc_info=True)
     finally:
         await service.cleanup()
-        logger.info("🔄 Connection closed")
+        logger.info("Connection closed")
